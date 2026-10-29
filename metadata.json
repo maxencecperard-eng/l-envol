@@ -1,0 +1,6 @@
+{
+  "name": "L'Envol - Simulateur d'Oiseau",
+  "description": "Pilotez un oiseau en plein vol, accomplissez des missions, repérez-vous grâce à la mini-carte et gagnez des pièces pour débloquer de nouveaux oiseaux toujours plus rapides !",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
