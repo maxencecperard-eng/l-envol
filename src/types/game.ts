@@ -21,6 +21,11 @@ export interface BirdDef {
   turnSpeed: number;
   flapStrength: number;
   trailColor: string;
+  // Optional morphology modifiers used by the 3D model (defaults to 1 / 0)
+  bodyWidth?: number;
+  tailLength?: number;
+  beakLength?: number;
+  crestSize?: number;
 }
 
 export type MissionType = 'tutorial' | 'ring_course' | 'collect' | 'reach' | 'speed_run';

@@ -101,9 +101,10 @@ export const FlightCanvas: React.FC<FlightCanvasProps> = ({
 
     const scene = new THREE.Scene();
     scene.background = new THREE.Color('#90cdf4');
-    scene.fog = new THREE.FogExp2('#90cdf4', 0.0028);
+    // Light haze masks the streamed terrain edge and makes the world feel vast
+    scene.fog = new THREE.FogExp2('#90cdf4', 0.0015);
 
-    const camera = new THREE.PerspectiveCamera(60, width / height, 0.5, 900);
+    const camera = new THREE.PerspectiveCamera(60, width / height, 0.5, 2400);
     camera.position.set(0, 28, -12);
 
     const renderer = new THREE.WebGLRenderer({
@@ -210,8 +211,8 @@ export const FlightCanvas: React.FC<FlightCanvasProps> = ({
         speedRatio
       );
 
-      // Update world props (windmill, lighthouse, coins rotation, updraft particles)
-      worldRig.updateWorld(elapsed, delta);
+      // Update world props (terrain streaming, ocean, clouds, coins, updrafts)
+      worldRig.updateWorld(elapsed, delta, telemetry.position);
 
       // Move sun light along with bird so shadows stay crisp
       sunLight.position.set(

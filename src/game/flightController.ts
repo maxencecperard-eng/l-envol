@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { BirdDef, ThermalUpdraft } from '../types/game';
-import { getTerrainHeight } from '../world/proceduralWorld';
+import { getTerrainHeight, SEA_LEVEL } from '../world/proceduralWorld';
 import { sounds } from '../audio/soundManager';
 
 export interface FlightInputState {
@@ -155,9 +155,10 @@ export class FlightController {
     this.position.x += forwardX;
     this.position.z += forwardZ;
 
-    // 8. Ground / Ocean Collision Soft Buffer
+    // 8. Ground / Ocean Collision Soft Buffer (terrain and sea are infinite)
     const terrainY = getTerrainHeight(this.position.x, this.position.z);
-    const minAltitude = terrainY + 1.6;
+    const groundY = Math.max(terrainY, SEA_LEVEL);
+    const minAltitude = groundY + 1.6;
     if (this.position.y < minAltitude) {
       this.position.y = THREE.MathUtils.damp(this.position.y, minAltitude + 1.2, 12, dt);
       // Lift nose when skimming the terrain
@@ -179,7 +180,7 @@ export class FlightController {
 
     const camX = this.position.x - Math.sin(this.headingAngle) * camDist;
     const camZ = this.position.z - Math.cos(this.headingAngle) * camDist;
-    const camY = Math.max(terrainY + 1.8, this.position.y + camHeight);
+    const camY = Math.max(groundY + 1.8, this.position.y + camHeight);
 
     this.cameraTarget.set(camX, camY, camZ);
     camera.position.lerp(this.cameraTarget, 0.12);

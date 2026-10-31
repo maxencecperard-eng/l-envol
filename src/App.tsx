@@ -12,6 +12,7 @@ import { FlightTelemetry, FlightInputState } from './game/flightController';
 import { FlightCanvas } from './components/FlightCanvas';
 import { Minimap } from './components/Minimap';
 import { MissionHUD } from './components/MissionHUD';
+import { MissionPickerModal } from './components/MissionPickerModal';
 import { BirdShopModal } from './components/BirdShopModal';
 import { FlightControlsOverlay } from './components/FlightControlsOverlay';
 import { sounds } from './audio/soundManager';
@@ -54,7 +55,14 @@ export default function App() {
     if (!saved) return INITIAL_MISSIONS;
     try {
       const parsed: Mission[] = JSON.parse(saved);
-      return parsed;
+      // Merge saves with the current mission list so new missions always appear,
+      // and keep every mission freely selectable from the mission picker.
+      return INITIAL_MISSIONS.map((base) => {
+        const existing = parsed.find((m) => m.id === base.id);
+        return existing
+          ? { ...base, ...existing, unlocked: true, objectives: existing.objectives ?? base.objectives }
+          : base;
+      });
     } catch {
       return INITIAL_MISSIONS;
     }
@@ -91,6 +99,7 @@ export default function App() {
   });
 
   const [isShopOpen, setIsShopOpen] = useState(false);
+  const [isMissionPickerOpen, setIsMissionPickerOpen] = useState(false);
   const [recentReward, setRecentReward] = useState<number | null>(null);
   const [resetSignal, setResetSignal] = useState(0);
 
@@ -307,6 +316,26 @@ export default function App() {
     return true;
   }, [birds, coins]);
 
+  // Launch any mission from the mission picker (missions are replayable)
+  const handleSelectMission = useCallback((missionId: string) => {
+    setMissions((prev) =>
+      prev.map((m) =>
+        m.id === missionId
+          ? {
+              ...m,
+              unlocked: true,
+              completed: false,
+              currentObjectiveIndex: 0,
+              objectives: m.objectives.map((obj) => ({ ...obj, completed: false })),
+            }
+          : m
+      )
+    );
+    setActiveMissionId(missionId);
+    setIsMissionPickerOpen(false);
+    sounds.playBuy();
+  }, []);
+
   // Respawn bird to nest
   const handleRespawnNest = useCallback(() => {
     setResetSignal((s) => s + 1);
@@ -341,11 +370,10 @@ export default function App() {
       {/* Top HUD: Mission Guidance, Coins, Aviary Button */}
       <MissionHUD
         currentMission={currentMission}
-        allMissions={missions}
-        onSelectMission={setActiveMissionId}
         coins={coins}
         recentReward={recentReward}
         onOpenAviary={() => setIsShopOpen(true)}
+        onOpenMissionPicker={() => setIsMissionPickerOpen(true)}
       />
 
       {/* Requested Bottom-Right Radar Minimap with Real-time Distance */}
@@ -365,7 +393,18 @@ export default function App() {
         birdName={activeBird.name}
       />
 
-      {/* Bird Shop / Aviary Modal */}
+      {/* Mission picker: choose any mission, see its reward and distance */}
+      <MissionPickerModal
+        isOpen={isMissionPickerOpen}
+        onClose={() => setIsMissionPickerOpen(false)}
+        missions={missions}
+        activeMissionId={activeMissionId}
+        onSelectMission={handleSelectMission}
+        birdPos={birdPositionTuple}
+        coins={coins}
+      />
+
+      {/* Bird Shop / Aviary Modal with live 3D preview */}
       <BirdShopModal
         isOpen={isShopOpen}
         onClose={() => setIsShopOpen(false)}

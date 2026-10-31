@@ -98,6 +98,13 @@ export function createProceduralBird(birdDef: BirdDef): BirdMeshRig {
   rightEye.position.set(0.25, 0.1, 0.22);
   headGroup.add(leftEye, rightEye);
 
+  // Optional crest / plume (owls, phoenix...)
+  const crestGeo = new THREE.ConeGeometry(0.13, 0.62, 4);
+  const crestMesh = new THREE.Mesh(crestGeo, accentMaterial);
+  crestMesh.position.set(0, 0.42, -0.08);
+  crestMesh.rotation.x = -0.25;
+  headGroup.add(crestMesh);
+
   rootGroup.add(headGroup);
 
   // 3. Tail Group (Fan feathers)
@@ -184,11 +191,29 @@ export function createProceduralBird(birdDef: BirdDef): BirdMeshRig {
   const trailPointsLeft: THREE.Vector3[] = [];
   const trailPointsRight: THREE.Vector3[] = [];
 
-  const updateColors = (newDef: BirdDef) => {
+  // Applies colors *and* the per-species silhouette (body, tail, beak, crest).
+  const applyBirdDef = (newDef: BirdDef) => {
     bodyMaterial.color.set(newDef.color);
     secondaryMaterial.color.set(newDef.secondaryColor);
     accentMaterial.color.set(newDef.accentColor);
     rootGroup.scale.setScalar(newDef.scale);
+
+    const bodyWidth = newDef.bodyWidth ?? 1;
+    bodyMesh.scale.x = bodyWidth;
+    bellyMesh.scale.x = bodyWidth;
+
+    tailGroup.scale.z = newDef.tailLength ?? 1;
+    beakMesh.scale.z = newDef.beakLength ?? 1;
+
+    const crest = newDef.crestSize ?? 0;
+    crestMesh.visible = crest > 0.02;
+    crestMesh.scale.set(1, Math.max(0.2, crest), 1);
+  };
+
+  applyBirdDef(birdDef);
+
+  const updateColors = (newDef: BirdDef) => {
+    applyBirdDef(newDef);
   };
 
   const updateAnimation = (

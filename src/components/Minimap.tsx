@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Compass, Navigation, Maximize2, Minimize2, ZoomIn, ZoomOut } from 'lucide-react';
 import { MissionObjective, WorldLandmark } from '../types/game';
 
@@ -9,17 +9,63 @@ interface MinimapProps {
   landmarks: WorldLandmark[];
 }
 
+const RADAR_RANGES = [220, 450, 900, 1800];
+
 export const Minimap: React.FC<MinimapProps> = ({
   birdPos,
   headingAngle,
   currentObjective,
   landmarks,
 }) => {
-  const [radarRange, setRadarRange] = useState<number>(220); // World units radius
+  const [radarRange, setRadarRange] = useState<number>(RADAR_RANGES[0]); // World units radius
   const [isExpanded, setIsExpanded] = useState<boolean>(false);
+  // Phones get a smaller radar that sits above the flight controls dock
+  const [isNarrow, setIsNarrow] = useState<boolean>(
+    () => typeof window !== 'undefined' && window.matchMedia('(max-width: 639px)').matches
+  );
+  const [isShort, setIsShort] = useState<boolean>(
+    () => typeof window !== 'undefined' && window.matchMedia('(max-height: 520px)').matches
+  );
+  // Touch layouts use the taller two-row control dock
+  const [isTouch, setIsTouch] = useState<boolean>(
+    () => typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches
+  );
 
-  const mapSize = isExpanded ? 240 : 170;
+  useEffect(() => {
+    const narrowQuery = window.matchMedia('(max-width: 639px)');
+    const shortQuery = window.matchMedia('(max-height: 520px)');
+    const touchQuery = window.matchMedia('(pointer: coarse)');
+    const handleNarrow = (event: MediaQueryListEvent) => {
+      setIsNarrow(event.matches);
+      if (event.matches) setIsExpanded(false);
+    };
+    const handleShort = (event: MediaQueryListEvent) => setIsShort(event.matches);
+    const handleTouch = (event: MediaQueryListEvent) => setIsTouch(event.matches);
+    narrowQuery.addEventListener('change', handleNarrow);
+    shortQuery.addEventListener('change', handleShort);
+    touchQuery.addEventListener('change', handleTouch);
+    return () => {
+      narrowQuery.removeEventListener('change', handleNarrow);
+      shortQuery.removeEventListener('change', handleShort);
+      touchQuery.removeEventListener('change', handleTouch);
+    };
+  }, []);
+
+  const isCompact = isNarrow || isShort;
+  const mapSize = isExpanded
+    ? isShort
+      ? 170
+      : isCompact
+      ? 200
+      : 240
+    : isShort
+    ? 112
+    : isNarrow
+    ? 124
+    : 170;
   const halfSize = mapSize / 2;
+  // Keep the radar clear of the bottom control dock on small screens
+  const bottomOffset = isTouch ? (isShort ? 172 : 190) : isShort ? 124 : isNarrow ? 190 : 16;
 
   // Compute distance to current mission objective
   let distToObjective = 0;
@@ -62,12 +108,15 @@ export const Minimap: React.FC<MinimapProps> = ({
 
   return (
     <div
-      className="fixed bottom-4 right-4 z-30 select-none flex flex-col items-end pointer-events-auto"
-      style={{ filter: 'drop-shadow(0 8px 24px rgba(0,0,0,0.4))' }}
+      className="fixed right-2 sm:right-4 z-30 select-none flex flex-col items-end pointer-events-auto"
+      style={{
+        bottom: `${bottomOffset}px`,
+        filter: 'drop-shadow(0 8px 24px rgba(0,0,0,0.4))',
+      }}
     >
       {/* Objective Distance Callout Banner */}
       {currentObjective && (
-        <div className="mb-2 bg-slate-900/90 text-white border border-amber-400/50 rounded-xl px-3 py-1.5 flex items-center gap-2 text-xs shadow-lg backdrop-blur-md animate-in fade-in slide-in-from-bottom-2">
+        <div className="mb-2 bg-slate-900/90 text-white border border-amber-400/50 rounded-xl px-2.5 sm:px-3 py-1.5 flex items-center gap-2 text-xs shadow-lg backdrop-blur-md animate-in fade-in slide-in-from-bottom-2">
           <div
             className="w-4 h-4 rounded-full bg-amber-400/20 text-amber-300 flex items-center justify-center shrink-0"
             style={{
@@ -78,12 +127,14 @@ export const Minimap: React.FC<MinimapProps> = ({
             <Navigation className="w-3 h-3 fill-amber-400 text-amber-400" />
           </div>
           <div className="flex flex-col">
-            <span className="text-[10px] text-amber-300/80 font-medium tracking-wider uppercase">
-              Mission Active
-            </span>
+            {!isCompact && (
+              <span className="text-[10px] text-amber-300/80 font-medium tracking-wider uppercase">
+                Mission Active
+              </span>
+            )}
             <div className="flex items-center gap-1.5 font-bold">
               <span className="text-amber-300">{formatDist(distToObjective)}</span>
-              <span className="text-slate-400 text-[11px] font-normal truncate max-w-[130px]">
+              <span className="text-slate-400 text-[11px] font-normal truncate max-w-[90px] sm:max-w-[130px]">
                 {currentObjective.markerLabel || currentObjective.instruction}
               </span>
             </div>
@@ -190,11 +241,17 @@ export const Minimap: React.FC<MinimapProps> = ({
         {/* Radar Controls Overlay Buttons (Zoom & Expand) */}
         <div className="absolute bottom-1 right-2 flex items-center gap-1 z-30">
           <button
-            onClick={() => setRadarRange((prev) => (prev > 140 ? prev - 60 : 340))}
-            className="p-1 rounded-full bg-slate-800/80 hover:bg-slate-700 text-slate-300 text-[10px] transition"
+            onClick={() =>
+              setRadarRange((prev) => {
+                const index = RADAR_RANGES.indexOf(prev);
+                return RADAR_RANGES[(index + 1) % RADAR_RANGES.length];
+              })
+            }
+            className="px-1.5 py-1 rounded-full bg-slate-800/80 hover:bg-slate-700 text-slate-300 text-[10px] transition flex items-center gap-0.5"
             title="Ajuster le zoom du radar"
           >
-            {radarRange <= 160 ? <ZoomIn className="w-3 h-3" /> : <ZoomOut className="w-3 h-3" />}
+            {radarRange <= 220 ? <ZoomIn className="w-3 h-3" /> : <ZoomOut className="w-3 h-3" />}
+            <span className="font-mono text-[8px]">{radarRange >= 1000 ? `${radarRange / 1000}k` : radarRange}</span>
           </button>
           <button
             onClick={() => setIsExpanded((prev) => !prev)}
@@ -205,9 +262,10 @@ export const Minimap: React.FC<MinimapProps> = ({
           </button>
         </div>
 
-        {/* Altitude indicator on top-left of radar */}
-        <div className="absolute top-1.5 left-3 text-[9px] font-mono text-emerald-300/80">
-          ALT {Math.round(birdPos[1])}m
+        {/* Altitude + open-world hint on top-left of radar */}
+        <div className="absolute top-1.5 left-3 flex flex-col text-[9px] font-mono text-emerald-300/80">
+          <span>ALT {Math.round(birdPos[1])}m</span>
+          <span className="text-[8px] text-slate-400">Monde ouvert ∞</span>
         </div>
       </div>
     </div>

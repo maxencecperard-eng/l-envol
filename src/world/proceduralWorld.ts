@@ -1,34 +1,66 @@
 import * as THREE from 'three';
 import { CoinPickup, MissionObjective, ThermalUpdraft, WorldLandmark } from '../types/game';
 
-// Mathematical continuous terrain function
+// ---------------------------------------------------------------------------
+// Open-world constants
+// ---------------------------------------------------------------------------
+
+/** Side length of one streamed terrain tile (world units). */
+export const TERRAIN_TILE_SIZE = 480;
+const TERRAIN_TILE_SEGMENTS = 36;
+/** 2 => a 5x5 ring of tiles (2400 x 2400 units) always surrounds the player. */
+const TERRAIN_VIEW_RADIUS = 2;
+/** Sea level shared by the endless ocean plane and the terrain shading. */
+export const SEA_LEVEL = 1.2;
+
+function smoothstep(edge0: number, edge1: number, value: number): number {
+  const t = Math.min(1, Math.max(0, (value - edge0) / (edge1 - edge0)));
+  return t * t * (3 - 2 * t);
+}
+
+/**
+ * Continuous, unbounded terrain height field.
+ *
+ * It is made only of cheap trigonometric layers so it can be evaluated for
+ * every vertex of every streamed tile, for tree placement and for physics
+ * ground collision — one single source of truth, with no world edge.
+ */
 export function getTerrainHeight(x: number, z: number): number {
-  const distFromCenter = Math.sqrt(x * x + z * z);
-  if (distFromCenter > 220) {
-    // Slopes down into ocean
-    return Math.max(-6, 2 - (distFromCenter - 220) * 0.15);
-  }
+  // Broad rolling hills around sea level
+  let h = 3;
+  h += Math.sin(x * 0.0061 + 0.8) * Math.cos(z * 0.0053 - 0.4) * 3.5;
+  h += Math.sin(x * 0.0137 - 1.1) * Math.sin(z * 0.0119 + 0.6) * 2.0;
+  h += Math.sin((x + z) * 0.021) * 0.8;
+  h += Math.sin(x * 0.047 - z * 0.041) * 0.4;
 
-  // Base rolling hills
-  let h = Math.sin(x * 0.02) * Math.cos(z * 0.02) * 6;
-  h += Math.sin(x * 0.045 + 1.2) * Math.sin(z * 0.038) * 4;
+  // Occasional mountain ranges (they fade in and out across the map).
+  // The starting valley is kept clear so the nest and first missions stay readable.
+  const ridgeWave = Math.sin(x * 0.0024 + 1.7) * Math.cos(z * 0.0021 - 0.8);
+  const mountainMask = smoothstep(0.3, 0.82, ridgeWave);
+  const valleyMask = smoothstep(180, 520, Math.hypot(x, z));
+  h += mountainMask * valleyMask * (26 + Math.sin(x * 0.009) * 5 + Math.cos(z * 0.008) * 5);
 
+  // Occasional low basins that fill with water and become lakes
+  const basinWave = Math.sin(x * 0.0041 + 2.1) * Math.cos(z * 0.0037 - 1.2);
+  h -= smoothstep(0.45, 0.9, basinWave) * 11;
+
+  // --- Signature landmarks around the starting valley -----------------------
   // Mountain ridge in the northwest (Falaises)
-  const cliffDist = Math.hypot(x - (-50), z - (-120));
+  const cliffDist = Math.hypot(x + 50, z + 120);
   if (cliffDist < 70) {
     const factor = Math.max(0, 1 - cliffDist / 70);
     h += factor * factor * 42;
   }
 
   // Village hill in the northeast
-  const villageDist = Math.hypot(x - 110, z - (-90));
+  const villageDist = Math.hypot(x - 110, z + 90);
   if (villageDist < 60) {
     const factor = Math.max(0, 1 - villageDist / 60);
-    h += factor * 20;
+    h += factor * 14;
   }
 
   // Lighthouse promontory in the southwest
-  const lighthouseDist = Math.hypot(x - (-130), z - 110);
+  const lighthouseDist = Math.hypot(x + 130, z - 110);
   if (lighthouseDist < 50) {
     const factor = Math.max(0, 1 - lighthouseDist / 50);
     h += factor * 24;
@@ -38,17 +70,17 @@ export function getTerrainHeight(x: number, z: number): number {
   const millDist = Math.hypot(x - 75, z - 60);
   if (millDist < 45) {
     const factor = Math.max(0, 1 - millDist / 45);
-    h += factor * 14;
+    h += factor * 10;
   }
 
   // Emerald lake depression
-  const lakeDist = Math.hypot(x - (-30), z - 40);
-  if (lakeDist < 40) {
-    const factor = Math.max(0, 1 - lakeDist / 40);
-    h -= factor * 10;
+  const lakeDist = Math.hypot(x + 30, z - 40);
+  if (lakeDist < 32) {
+    const factor = Math.max(0, 1 - lakeDist / 32);
+    h -= factor * 8;
   }
 
-  return Math.max(0.5, h);
+  return Math.max(-12, h);
 }
 
 export interface WorldSceneRig {
@@ -59,7 +91,7 @@ export interface WorldSceneRig {
   missionBeaconGroup: THREE.Group;
   coinMeshes: Map<string, THREE.Mesh>;
   updraftParticles: THREE.Points[];
-  updateWorld: (elapsed: number, delta: number) => void;
+  updateWorld: (elapsed: number, delta: number, playerPosition: THREE.Vector3) => void;
   setRingObjective: (objective: MissionObjective | null) => void;
   removeCoinMesh: (coinId: string) => void;
 }
@@ -72,14 +104,16 @@ export function buildProceduralWorld(
   const worldGroup = new THREE.Group();
   worldGroup.name = 'ProceduralWorld';
 
-  // 1. Terrain Mesh (Segmented grid with custom vertex displacement based on getTerrainHeight)
-  const terrainSize = 520;
-  const segments = 120;
-  const terrainGeo = new THREE.PlaneGeometry(terrainSize, terrainSize, segments, segments);
-  terrainGeo.rotateX(-Math.PI / 2);
+  // 1. Endless streamed terrain -------------------------------------------------
+  // The map has no border: square tiles are (re)generated around the player as
+  // they fly, using the unbounded getTerrainHeight() field. The same tiles are
+  // reused while the player stays inside them, so there is no visible popping.
+  const tileGroup = new THREE.Group();
+  tileGroup.name = 'StreamedTerrain';
+  worldGroup.add(tileGroup);
 
-  const posAttr = terrainGeo.attributes.position;
-  const colorAttr = new Float32Array(posAttr.count * 3);
+  const activeTiles = new Map<string, THREE.Group>();
+  let streamedCenter: { ix: number; iz: number } | null = null;
 
   const colorGrass = new THREE.Color('#4a7c36');
   const colorHill = new THREE.Color('#386629');
@@ -88,31 +122,6 @@ export function buildProceduralWorld(
   const colorSand = new THREE.Color('#e2c88f');
   const tmpColor = new THREE.Color();
 
-  for (let i = 0; i < posAttr.count; i++) {
-    const x = posAttr.getX(i);
-    const z = posAttr.getZ(i);
-    const y = getTerrainHeight(x, z);
-    posAttr.setY(i, y);
-
-    // Vertex coloring based on elevation and terrain features
-    if (y < 2.5) {
-      tmpColor.copy(colorSand);
-    } else if (y < 18) {
-      tmpColor.lerpColors(colorGrass, colorHill, y / 18);
-    } else if (y < 35) {
-      tmpColor.lerpColors(colorHill, colorRock, (y - 18) / 17);
-    } else {
-      tmpColor.lerpColors(colorRock, colorPeak, Math.min(1, (y - 35) / 20));
-    }
-
-    colorAttr[i * 3] = tmpColor.r;
-    colorAttr[i * 3 + 1] = tmpColor.g;
-    colorAttr[i * 3 + 2] = tmpColor.b;
-  }
-
-  terrainGeo.setAttribute('color', new THREE.BufferAttribute(colorAttr, 3));
-  terrainGeo.computeVertexNormals();
-
   const terrainMat = new THREE.MeshStandardMaterial({
     vertexColors: true,
     roughness: 0.85,
@@ -120,31 +129,206 @@ export function buildProceduralWorld(
     flatShading: true,
   });
 
-  const terrainMesh = new THREE.Mesh(terrainGeo, terrainMat);
-  terrainMesh.receiveShadow = true;
-  worldGroup.add(terrainMesh);
+  // Shared forest assets (one geometry/material for every tile)
+  const treeTrunkGeo = new THREE.CylinderGeometry(0.3, 0.5, 4, 5);
+  treeTrunkGeo.translate(0, 2, 0);
+  const treeFoliageGeo = new THREE.ConeGeometry(2.4, 6, 5);
+  treeFoliageGeo.translate(0, 6, 0);
+  const treeTrunkMat = new THREE.MeshStandardMaterial({ color: '#543d2b', roughness: 0.9 });
+  const treeFoliageMat = new THREE.MeshStandardMaterial({
+    color: '#276749',
+    roughness: 0.8,
+    flatShading: true,
+  });
 
-  // 2. Surrounding Ocean & Lake
-  const oceanGeo = new THREE.PlaneGeometry(1200, 1200, 32, 32);
+  const LANDMARK_CLEARINGS = [
+    { x: 0, z: 0, r: 26 }, // Grand Chêne
+    { x: 75, z: 60, r: 18 }, // Moulin
+    { x: -130, z: 110, r: 22 }, // Phare
+    { x: 110, z: -90, r: 24 }, // Village
+    { x: -50, z: -120, r: 20 }, // Falaises
+    { x: -30, z: 40, r: 36 }, // Lac
+  ];
+
+  const mulberry32 = (seed: number) => {
+    let t = seed;
+    return () => {
+      t += 0x6d2b79f5;
+      let r = Math.imul(t ^ (t >>> 15), t | 1);
+      r ^= r + Math.imul(r ^ (r >>> 7), r | 61);
+      return ((r ^ (r >>> 14)) >>> 0) / 4294967296;
+    };
+  };
+
+  const tileSeed = (ix: number, iz: number) =>
+    (Math.imul(ix, 73856093) ^ Math.imul(iz, 19349663) ^ 0x9e3779b9) | 0;
+
+  const createTerrainTile = (ix: number, iz: number): THREE.Group => {
+    const group = new THREE.Group();
+    group.name = `Tile_${ix}_${iz}`;
+    group.position.set(ix * TERRAIN_TILE_SIZE, 0, iz * TERRAIN_TILE_SIZE);
+
+    const geo = new THREE.PlaneGeometry(
+      TERRAIN_TILE_SIZE,
+      TERRAIN_TILE_SIZE,
+      TERRAIN_TILE_SEGMENTS,
+      TERRAIN_TILE_SEGMENTS
+    );
+    geo.rotateX(-Math.PI / 2);
+
+    const posAttr = geo.attributes.position;
+    const colorAttr = new Float32Array(posAttr.count * 3);
+
+    for (let i = 0; i < posAttr.count; i++) {
+      const localX = posAttr.getX(i);
+      const localZ = posAttr.getZ(i);
+      const worldX = ix * TERRAIN_TILE_SIZE + localX;
+      const worldZ = iz * TERRAIN_TILE_SIZE + localZ;
+      const y = getTerrainHeight(worldX, worldZ);
+      posAttr.setY(i, y);
+
+      if (y < 2.8) {
+        tmpColor.copy(colorSand);
+      } else if (y < 18) {
+        tmpColor.lerpColors(colorGrass, colorHill, y / 18);
+      } else if (y < 35) {
+        tmpColor.lerpColors(colorHill, colorRock, (y - 18) / 17);
+      } else {
+        tmpColor.lerpColors(colorRock, colorPeak, Math.min(1, (y - 35) / 20));
+      }
+
+      // Subtle patchwork so huge meadows never look like one flat colour
+      const patch = 1 + Math.sin(worldX * 0.041 + worldZ * 0.017) * 0.07
+        + Math.cos(worldZ * 0.035 - worldX * 0.012) * 0.05;
+      tmpColor.multiplyScalar(patch);
+
+      colorAttr[i * 3] = tmpColor.r;
+      colorAttr[i * 3 + 1] = tmpColor.g;
+      colorAttr[i * 3 + 2] = tmpColor.b;
+    }
+
+    geo.setAttribute('color', new THREE.BufferAttribute(colorAttr, 3));
+    geo.computeVertexNormals();
+    geo.computeBoundingSphere();
+
+    const mesh = new THREE.Mesh(geo, terrainMat);
+    mesh.receiveShadow = true;
+    group.add(mesh);
+
+    // Deterministic instanced forest for this tile
+    const rand = mulberry32(tileSeed(ix, iz));
+    const targetTrees = 34 + Math.floor(rand() * 34);
+    const trees: Array<{ x: number; y: number; z: number; s: number; rot: number }> = [];
+
+    for (let attempt = 0; attempt < targetTrees * 5 && trees.length < targetTrees; attempt++) {
+      const worldX = ix * TERRAIN_TILE_SIZE + rand() * TERRAIN_TILE_SIZE;
+      const worldZ = iz * TERRAIN_TILE_SIZE + rand() * TERRAIN_TILE_SIZE;
+      if (LANDMARK_CLEARINGS.some((c) => Math.hypot(worldX - c.x, worldZ - c.z) < c.r)) continue;
+
+      const y = getTerrainHeight(worldX, worldZ);
+      if (y < 2.6 || y > 44) continue;
+
+      trees.push({
+        x: worldX - ix * TERRAIN_TILE_SIZE,
+        y,
+        z: worldZ - iz * TERRAIN_TILE_SIZE,
+        s: 0.75 + rand() * 0.6,
+        rot: rand() * Math.PI * 2,
+      });
+    }
+
+    if (trees.length > 0) {
+      const instTrunk = new THREE.InstancedMesh(treeTrunkGeo, treeTrunkMat, trees.length);
+      const instFoliage = new THREE.InstancedMesh(treeFoliageGeo, treeFoliageMat, trees.length);
+      instTrunk.castShadow = true;
+      instFoliage.castShadow = true;
+
+      const dummy = new THREE.Object3D();
+      trees.forEach((tree, index) => {
+        dummy.position.set(tree.x, tree.y, tree.z);
+        dummy.scale.setScalar(tree.s);
+        dummy.rotation.set(0, tree.rot, 0);
+        dummy.updateMatrix();
+        instTrunk.setMatrixAt(index, dummy.matrix);
+        instFoliage.setMatrixAt(index, dummy.matrix);
+      });
+      instTrunk.instanceMatrix.needsUpdate = true;
+      instFoliage.instanceMatrix.needsUpdate = true;
+      instTrunk.computeBoundingSphere();
+      instFoliage.computeBoundingSphere();
+      group.add(instTrunk, instFoliage);
+    }
+
+    group.userData.terrainGeo = geo;
+    return group;
+  };
+
+  const disposeTile = (tile: THREE.Group) => {
+    tile.traverse((child) => {
+      if (child instanceof THREE.InstancedMesh) {
+        // Frees the per-tile instance matrix; shared geometry stays alive.
+        child.dispose();
+      }
+    });
+    const geo = tile.userData.terrainGeo as THREE.BufferGeometry | undefined;
+    geo?.dispose();
+  };
+
+  const updateStreaming = (playerX: number, playerZ: number) => {
+    const centerX = Math.floor(playerX / TERRAIN_TILE_SIZE);
+    const centerZ = Math.floor(playerZ / TERRAIN_TILE_SIZE);
+    if (streamedCenter && streamedCenter.ix === centerX && streamedCenter.iz === centerZ) {
+      return;
+    }
+    streamedCenter = { ix: centerX, iz: centerZ };
+
+    const wantedKeys = new Set<string>();
+    for (let dx = -TERRAIN_VIEW_RADIUS; dx <= TERRAIN_VIEW_RADIUS; dx++) {
+      for (let dz = -TERRAIN_VIEW_RADIUS; dz <= TERRAIN_VIEW_RADIUS; dz++) {
+        wantedKeys.add(`${centerX + dx}:${centerZ + dz}`);
+      }
+    }
+
+    // Drop tiles that left the ring
+    activeTiles.forEach((tile, key) => {
+      if (!wantedKeys.has(key)) {
+        tileGroup.remove(tile);
+        disposeTile(tile);
+        activeTiles.delete(key);
+      }
+    });
+
+    // Build tiles that entered the ring
+    wantedKeys.forEach((key) => {
+      if (activeTiles.has(key)) return;
+      const [ix, iz] = key.split(':').map(Number);
+      const tile = createTerrainTile(ix, iz);
+      tileGroup.add(tile);
+      activeTiles.set(key, tile);
+    });
+  };
+
+  // 2. Surrounding Ocean (follows the player so it also feels endless)
+  const oceanGeo = new THREE.PlaneGeometry(4600, 4600, 12, 12);
   oceanGeo.rotateX(-Math.PI / 2);
   const oceanMat = new THREE.MeshStandardMaterial({
     color: '#2b6cb0',
-    roughness: 0.2,
-    metalness: 0.3,
+    roughness: 0.62,
+    metalness: 0.04,
     transparent: true,
-    opacity: 0.88,
+    opacity: 0.9,
   });
   const oceanMesh = new THREE.Mesh(oceanGeo, oceanMat);
-  oceanMesh.position.y = 1.2;
+  oceanMesh.position.y = SEA_LEVEL;
   worldGroup.add(oceanMesh);
 
   // Lake emerald water disk
-  const lakeGeo = new THREE.CircleGeometry(36, 24);
+  const lakeGeo = new THREE.CircleGeometry(29, 24);
   lakeGeo.rotateX(-Math.PI / 2);
   const lakeMat = new THREE.MeshStandardMaterial({
-    color: '#319795',
-    roughness: 0.15,
-    metalness: 0.2,
+    color: '#2c9f9b',
+    roughness: 0.55,
+    metalness: 0.04,
     transparent: true,
     opacity: 0.92,
   });
@@ -372,58 +556,10 @@ export function buildProceduralWorld(
 
   worldGroup.add(villageGroup);
 
-  // 7. Instanced Forest of Trees
-  const treeCount = 140;
-  const treeTrunkGeo = new THREE.CylinderGeometry(0.3, 0.5, 4, 5);
-  treeTrunkGeo.translate(0, 2, 0);
-  const treeFoliageGeo = new THREE.ConeGeometry(2.4, 6, 5);
-  treeFoliageGeo.translate(0, 6, 0);
+  // 7. Forest — instanced trees are generated with each terrain tile (see above)
 
-  const instTrunk = new THREE.InstancedMesh(treeTrunkGeo, trunkMat, treeCount);
-  const instFoliage = new THREE.InstancedMesh(treeFoliageGeo, foliageMat, treeCount);
-  instTrunk.castShadow = true;
-  instFoliage.castShadow = true;
-
-  const dummy = new THREE.Object3D();
-  let planted = 0;
-  for (let i = 0; i < treeCount * 3 && planted < treeCount; i++) {
-    const rx = (Math.random() - 0.5) * 360;
-    const rz = (Math.random() - 0.5) * 360;
-    const distCenter = Math.hypot(rx, rz);
-
-    // Keep clearings around main oak, lake, and buildings
-    if (distCenter < 18) continue;
-    if (Math.hypot(rx - (-30), rz - 40) < 32) continue; // lake
-    if (Math.hypot(rx - 75, rz - 60) < 18) continue; // mill
-    if (Math.hypot(rx - (-130), rz - 110) < 22) continue; // lighthouse
-    if (Math.hypot(rx - 110, rz - (-90)) < 24) continue; // village
-
-    const ry = getTerrainHeight(rx, rz);
-    if (ry < 2.5 || ry > 40) continue; // don't grow in ocean or high bare peaks
-
-    const s = 0.75 + Math.random() * 0.6;
-    dummy.position.set(rx, ry, rz);
-    dummy.scale.set(s, s, s);
-    dummy.rotation.y = Math.random() * Math.PI * 2;
-    dummy.updateMatrix();
-
-    instTrunk.setMatrixAt(planted, dummy.matrix);
-    instFoliage.setMatrixAt(planted, dummy.matrix);
-    planted++;
-  }
-
-  instTrunk.count = planted;
-  instFoliage.count = planted;
-  instTrunk.instanceMatrix.needsUpdate = true;
-  instFoliage.instanceMatrix.needsUpdate = true;
-  instTrunk.computeBoundingSphere();
-  instFoliage.computeBoundingSphere();
-
-  worldGroup.add(instTrunk);
-  worldGroup.add(instFoliage);
-
-  // 8. Procedural Clouds in Sky (Fluffy clusters)
-  const cloudCount = 28;
+  // 8. Procedural Clouds in Sky (Fluffy clusters, wrapped around the player)
+  const cloudCount = 22;
   const cloudMat = new THREE.MeshStandardMaterial({
     color: '#ffffff',
     roughness: 0.9,
@@ -433,14 +569,15 @@ export function buildProceduralWorld(
     flatShading: true,
   });
 
+  const clouds: THREE.Group[] = [];
   for (let c = 0; c < cloudCount; c++) {
     const cloud = new THREE.Group();
-    const cx = (Math.random() - 0.5) * 440;
-    const cy = 55 + Math.random() * 45;
-    const cz = (Math.random() - 0.5) * 440;
+    const cx = (Math.random() - 0.5) * 1200;
+    const cy = 55 + Math.random() * 50;
+    const cz = (Math.random() - 0.5) * 1200;
     cloud.position.set(cx, cy, cz);
 
-    const puffs = 4 + Math.floor(Math.random() * 4);
+    const puffs = 4 + Math.floor(Math.random() * 3);
     for (let p = 0; p < puffs; p++) {
       const pGeo = new THREE.DodecahedronGeometry(5 + Math.random() * 6);
       const puff = new THREE.Mesh(pGeo, cloudMat);
@@ -448,6 +585,7 @@ export function buildProceduralWorld(
       cloud.add(puff);
     }
     worldGroup.add(cloud);
+    clouds.push(cloud);
   }
 
   // 9. Floating Spinning Coins
@@ -486,10 +624,11 @@ export function buildProceduralWorld(
     pGeo.setAttribute('position', new THREE.BufferAttribute(pPositions, 3));
     const pMat = new THREE.PointsMaterial({
       color: '#f6e05e',
-      size: 0.8,
+      size: 0.55,
       transparent: true,
-      opacity: 0.65,
+      opacity: 0.5,
       blending: THREE.AdditiveBlending,
+      depthWrite: false,
     });
     const points = new THREE.Points(pGeo, pMat);
     worldGroup.add(points);
@@ -564,15 +703,16 @@ export function buildProceduralWorld(
     }
 
     const pos = objective.position;
+    const groundY = Math.max(getTerrainHeight(pos[0], pos[2]), SEA_LEVEL);
     if (objective.type === 'ring') {
       missionRingGroup.visible = true;
       missionBeaconGroup.visible = true;
       missionRingGroup.position.set(...pos);
-      missionBeaconGroup.position.set(pos[0], 0, pos[2]);
+      missionBeaconGroup.position.set(pos[0], groundY, pos[2]);
     } else {
       missionRingGroup.visible = false;
       missionBeaconGroup.visible = true;
-      missionBeaconGroup.position.set(pos[0], 0, pos[2]);
+      missionBeaconGroup.position.set(pos[0], groundY, pos[2]);
     }
   };
 
@@ -583,7 +723,26 @@ export function buildProceduralWorld(
     }
   };
 
-  const updateWorld = (elapsed: number, delta: number) => {
+  const updateWorld = (elapsed: number, delta: number, playerPosition: THREE.Vector3) => {
+    // Stream new terrain tiles when the player crosses a tile boundary
+    updateStreaming(playerPosition.x, playerPosition.z);
+
+    // Endless ocean follows the player
+    oceanMesh.position.x = playerPosition.x;
+    oceanMesh.position.z = playerPosition.z;
+    oceanMesh.position.y = SEA_LEVEL;
+
+    // Clouds drift and wrap around the player, so the sky never runs out
+    clouds.forEach((cloud) => {
+      cloud.position.x += delta * 0.7;
+      const dx = cloud.position.x - playerPosition.x;
+      const dz = cloud.position.z - playerPosition.z;
+      if (dx > 900) cloud.position.x -= 1800;
+      else if (dx < -900) cloud.position.x += 1800;
+      if (dz > 900) cloud.position.z -= 1800;
+      else if (dz < -900) cloud.position.z += 1800;
+    });
+
     // Spin windmill blades smoothly
     if (bladesGroup) {
       bladesGroup.rotation.z += delta * 0.8;
@@ -622,6 +781,9 @@ export function buildProceduralWorld(
       pos.needsUpdate = true;
     });
   };
+
+  // Generate the first 5x5 ring of tiles around the starting nest
+  updateStreaming(0, 0);
 
   return {
     group: worldGroup,

@@ -41,8 +41,8 @@ Les jeux de vol grand public demandent des dizaines de touches, des heures de tu
 | Persona | Attente | Réponse produit |
 | --- | --- | --- |
 | Joueur occasionnel / familial | Prendre plaisir en 1 minute | Contrôles à 4 touches, didacticiel en 3 étapes, aucune sanction |
-| Amateur d'exploration | Un monde à parcourir | 6 points d'intérêt, 18 pièces, 4 ascendances, radar |
-| Collectionneur | Débloquer du contenu | 6 oiseaux, prix et statistiques différenciés |
+| Amateur d'exploration | Un monde à parcourir | Monde sans bord, 6 points d'intérêt, 108 pièces, 18 ascendances, radar |
+| Collectionneur | Débloquer du contenu | 17 oiseaux, prix et statistiques différenciés, aperçu 3D |
 | Développeur / étudiant | Comprendre une scène Three.js complète | Code séparé logique / rendu / UI, tout procédural |
 
 ## 4. Boucle de jeu
@@ -51,7 +51,7 @@ Les jeux de vol grand public demandent des dizaines de touches, des heures de tu
 2. **Suivre** l'objectif actif : anneau doré, colonne de lumière bleue, distance et cap sur le radar.
 3. **Atteindre** la zone (rayon de l'objectif) ou ramasser les pièces (rayon 3,2).
 4. **Terminer** les 2 à 4 étapes de la mission → fanfare, confettis, pièces créditées.
-5. **Dépenser** en Volière pour un oiseau plus rapide → la mission suivante se débloque.
+5. **Choisir** une nouvelle mission librement dans le sélecteur, puis dépenser ses pièces en Volière pour un oiseau plus rapide.
 
 La boucle n'a pas d'état d'échec : on ne peut pas perdre, seulement errer. Le coût d'une erreur est du temps de vol.
 
@@ -73,22 +73,23 @@ La boucle n'a pas d'état d'échec : on ne peut pas perdre, seulement errer. Le 
 
 ### FR-2 — Monde
 
-- `Implémenté` Terrain fini de 520 × 520 unités, 120 × 120 segments, coloré par altitude (sable, herbe, roche, neige).
-- `Implémenté` Océan au-delà du rayon 220 (le terrain descend jusqu'à −6) et lac Émeraude en dépression à `(−30, 40)`.
-- `Implémenté` 6 points d'intérêt : Grand Chêne et nid royal, Moulin à vent (pales animées), Grand Phare (faisceau rotatif), Village perché et clocher, Falaises brumeuses (relief), Lac Émeraude.
-- `Implémenté` 140 arbres instanciés, 28 amas de nuages, anneau et colonne de lumière mission.
-- `Implémenté` `getTerrainHeight(x, z)` est la source de vérité unique (maillage, placement, collision).
-- `Partiel` Monde déterministe pour le relief, mais arbres et nuages sont placés aléatoirement à chaque chargement.
+- `Implémenté` Terrain **sans bord** : tuiles de 480 unités (36 × 36 segments) régénérées en anneau 5 × 5 autour du joueur, colorées par altitude et par patchs.
+- `Implémenté` Océan infini qui suit le joueur (niveau 1,2), lacs en dépression, plafond de vol à 150 m.
+- `Implémenté` 6 points d'intérêt autour de la vallée de départ : Grand Chêne et nid royal, Moulin à vent (pales animées), Grand Phare (faisceau rotatif), Village perché et clocher, Falaises brumeuses (relief), Lac Émeraude.
+- `Implémenté` Forêt instanciée par tuile, 22 amas de nuages qui se replacent autour du joueur, anneau et colonne de lumière mission.
+- `Implémenté` `getTerrainHeight(x, z)` est la source de vérité unique (tuiles, placement, collision) et reste continue aux jointures.
+- `Implémenté` Monde déterministe : relief, arbres, pièces et ascendances lointaines sont générés par graines fixes.
 
 ### FR-3 — Missions et progression
 
-- `Implémenté` 6 missions, 19 objectifs, 3 catégories affichées : `didacticiel`, `aventure`, `defi`.
-- `Implémenté` Une seule mission active à la fois ; le journal permet de lancer toute mission déjà déverrouillée.
-- `Implémenté` Déblocage séquentiel : terminer la mission d'index *n* déverrouille l'index *n+1*.
+- `Implémenté` 8 missions, 25 objectifs, 3 catégories affichées : `didacticiel`, `aventure`, `defi`.
+- `Implémenté` Une seule mission active à la fois ; le sélecteur de missions liste **toutes** les missions avec récompense, distance depuis la position du joueur et longueur du parcours.
+- `Implémenté` Toutes les missions sont sélectionnables et rejouables ; en lancer une remet ses objectifs à zéro.
 - `Implémenté` Objectif validé par proximité 3D (`distance ≤ objective.radius`), détecté dans la boucle de rendu.
 - `Implémenté` Récompense en pièces + confettis + fanfare à la dernière étape ; message « Mission accomplie ».
+- `Implémenté` Objectif `light_safe` remonté à `(−125, 20, 115)` : la mission 3 est terminable.
 - `Partiel` L'objectif de type `land` (« se poser sur l'îlot ») se valide en volant dans le rayon, sans condition de contact avec le sol.
-- `Partiel` Une mission terminée n'est pas rejouable ; la mission active n'est pas sauvegardée au rechargement.
+- `Partiel` La mission active n'est pas sauvegardée au rechargement.
 - `Prévu` Missions chronométrées (`speed_run` est déclaré dans les types mais aucun contenu ne l'utilise).
 
 **Critères d'acceptation** : la mission 1 est jouable dès le premier lancement ; chaque étape coche une pastille du HUD ; la fin de mission crédite exactement `coinReward` et débloque la suivante.
@@ -96,8 +97,9 @@ La boucle n'a pas d'état d'échec : on ne peut pas perdre, seulement errer. Le 
 ### FR-4 — Économie et Volière
 
 - `Implémenté` Monnaie unique : pièces. Solde initial 30, jamais négatif (`handleBuyBird` refuse si insuffisant).
-- `Implémenté` 6 oiseaux, du Moineau gratuit (0) au Phénix (1 300).
+- `Implémenté` 17 oiseaux, du Moineau gratuit (0) au Phénix (1 300), avec silhouettes distinctes (largeur du corps, queue, bec, crête).
 - `Implémenté` Achat : débit, déverrouillage et équipement immédiat ; confettis + son d'achat.
+- `Implémenté` Volière avec **aperçu 3D animé** de chaque espèce (une seule scène WebGL, navigation par cartes et flèches).
 - `Implémenté` Chaque oiseau expose 4 statistiques d'affichage (vitesse, maniabilité, plané, piqué) et 5 paramètres physiques (`baseSpeed`, `maxSpeed`, `diveMultiplier`, `turnSpeed`, `flapStrength`).
 - `Implémenté` Le changement d'oiseau est appliqué à chaud (contrôleur + couleurs + échelle), sans rechargement de scène.
 - `Partiel` L'économie est purement locale : pas de serveur, pas de remboursement ni de revente.
@@ -105,8 +107,8 @@ La boucle n'a pas d'état d'échec : on ne peut pas perdre, seulement errer. Le 
 ### FR-5 — HUD, journal et minimap
 
 - `Implémenté` Bandeau haut : catégorie, titre, instruction courante, astuce, progression `x/n`, récompense.
-- `Implémenté` Journal des missions : statuts Terminé / En cours / Lancer / Verrouillé.
-- `Implémenté` Radar circulaire orienté, portée 220 par défaut (cycle 220 → 160 → 100 → 340), extension 170 → 240 px, points d'intérêt, balise d'objectif, flèche du joueur, altitude.
+- `Implémenté` Sélecteur de missions : toutes les missions, statuts Terminé / En cours / Disponible, récompense, distance au prochain objectif, longueur du parcours et bouton Lancer/Rejouer.
+- `Implémenté` Radar circulaire orienté, portée 220 par défaut (cycle 220 → 450 → 900 → 1 800), extension 170 → 240 px, points d'intérêt, balise d'objectif, flèche du joueur, altitude et mention « Monde ouvert ∞ ».
 - `Implémenté` Distance à l'objectif en mètres/kilomètres et flèche de cap relative.
 - `Implémenté` Dock de vol : vitesse (km/h), altitude (m), état piqué, indicateur d'ascendance, boutons Battre/Piqué/Chanter, mute, retour au nid.
 - `Implémenté` D-pad tactile affiché sous le breakpoint `sm` (640 px).
@@ -139,10 +141,21 @@ La boucle n'a pas d'état d'échec : on ne peut pas perdre, seulement errer. Le 
 | Oiseau | Prix | `baseSpeed` | `maxSpeed` | Vitesse affichée* | Piqué |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | Moineau des Prés | 0 | 14 | 22 | 79 km/h | 1,6× |
+| Rougegorge Familier | 40 | 15 | 23 | 83 km/h | 1,65× |
+| Chardonneret Élégant | 80 | 16 | 25 | 90 km/h | 1,65× |
 | Hirondelle Azur | 100 | 19 | 29 | 104 km/h | 1,9× |
+| Martin-Pêcheur d'Azur | 150 | 19 | 28 | 101 km/h | 2,15× |
+| Geai des Chênes | 190 | 18 | 27 | 97 km/h | 1,8× |
 | Pigeon Voyageur | 220 | 16 | 25 | 90 km/h | 1,7× |
+| Pie Bavarde | 260 | 19 | 28 | 101 km/h | 1,85× |
+| Grand-Duc d'Europe | 340 | 18 | 27 | 97 km/h | 1,9× |
+| Grand Corbeau | 420 | 19 | 29 | 104 km/h | 1,95× |
 | Faucon Pèlerin | 450 | 24 | 38 | 137 km/h | 2,5× |
+| Colibri Émeraude | 520 | 22 | 33 | 119 km/h | 1,7× |
+| Albatros des Tempêtes | 600 | 17 | 27 | 97 km/h | 1,8× |
 | Aigle Royal | 750 | 27 | 44 | 158 km/h | 2,3× |
+| Harfang des Neiges | 850 | 20 | 31 | 112 km/h | 2,05× |
+| Condor des Andes | 1 100 | 21 | 33 | 119 km/h | 2,0× |
 | Phénix Céleste | 1 300 | 33 | 54 | 194 km/h | 2,8× |
 
 \* `maxSpeed × 3,6`, tel qu'affiché sur les cartes de la Volière. En piqué, la vitesse peut approcher `maxSpeed × diveMultiplier × 3,6` (jusqu'à ~544 km/h pour le Phénix).
@@ -157,29 +170,32 @@ La boucle n'a pas d'état d'échec : on ne peut pas perdre, seulement errer. Le 
 | 4 | Le Slalom des Nuages | défi | 4 | 250 |
 | 5 | Le Courrier des Cimes | aventure | 2 | 320 |
 | 6 | L'Épreuve Solaire du Phénix | défi | 3 | 500 |
+| 7 | Les Confins du Monde | aventure | 3 | 650 |
+| 8 | L'Odyssée Sans Frontières | défi | 3 | 1 200 |
 
 ### Monde
 
 | Élément | Quantité | Détail |
 | --- | ---: | --- |
+| Tuiles de terrain | 5 × 5 autour du joueur | 480 unités, 36 × 36 segments, régénérées en continu |
 | Points d'intérêt | 6 | Nid, Moulin, Phare, Village, Falaises, Lac |
-| Ascendances thermiques | 4 | Rayon 24–32, force 16–25 |
-| Pièces flottantes | 18 | Valeur 5 / 10 / 15 / 20 |
-| Arbres | 140 | Instanciés, hors zones bâties |
-| Nuages | 28 amas | Altitude 55–100 |
+| Ascendances thermiques | 18 | Rayon 24–36, force 17–27 |
+| Pièces flottantes | 108 | Valeur 5 / 10 / 15 / 20 |
+| Arbres | ~34–68 par tuile | Instanciés, hors zones bâties |
+| Nuages | 22 amas | Altitude 55–105, replacés autour du joueur |
 
 ## 7. Équilibrage économique
 
 | Flux | Montant |
 | --- | ---: |
 | Solde initial | 30 |
-| Total des récompenses de mission | 1 430 |
-| Total des pièces du monde (par partie) | 180 |
-| Coût cumulé des 6 oiseaux | 2 820 |
+| Total des récompenses de mission | 3 280 |
+| Total des pièces du monde (par partie) | 900 |
+| Coût cumulé des 17 oiseaux | 7 370 |
 
-**Constat** : missions + solde initial ≈ 1 460 pièces, de quoi s'offrir le Faucon (450) et l'Aigle (750) ensemble (1 200), mais pas le Phénix (1 300) en plus. Compléter la collection exige donc de **rejouer les pièces du monde** (elles réapparaissent à chaque rechargement), seule boucle de farming disponible.
+**Constat** : missions + solde initial + pièces du monde ≈ 4 210 pièces par partie. Les missions étant rejouables et le monde sans bord, la collection complète reste un objectif long mais atteignable sans rechargement forcé.
 
-**Tant que la P0 du § 10 n'est pas corrigée**, seules les récompenses des missions 1 et 2 (180 pièces) sont accessibles ; le plafond réel est donc de 30 + 180 + 180 = 390 pièces par partie, insuffisant pour le Faucon sans plusieurs rechargements.
+**Risque produit** : le grind vers le Phénix peut être perçu comme artificiel si le joueur enchaîne les mêmes missions. Voir § 12.
 
 **Risque produit** : le grind vers le Phénix peut être perçu comme artificiel, faute de missions rejouables ou de récompenses répétables. Voir § 12.
 
@@ -200,20 +216,19 @@ La boucle n'a pas d'état d'échec : on ne peut pas perdre, seulement errer. Le 
 
 - **Client-only** : aucun serveur, aucune API. `express`, `dotenv`, `@google/genai`, `tsx`, `esbuild` sont des vestiges du template AI Studio et `metadata.json` n'est lu par aucun code ; `GEMINI_API_KEY` et `APP_URL` ne sont jamais utilisés.
 - **Zéro asset binaire** : géométries Three.js, couleurs, nuages et sons sont générés au runtime. Toute nouvelle ressource doit rester procédurale.
-- **Un seul canvas WebGL**, monté une fois ; les props passent par des `refs` pour ne jamais relancer la boucle.
+- **Un seul canvas de jeu**, monté une fois ; les props passent par des `refs` pour ne jamais relancer la boucle. La Volière ajoute un canvas d'aperçu éphémère (`BirdPreview3D`), détruit à la fermeture.
 - **`localStorage` comme seule base de données** : les clés existantes constituent le format de sauvegarde.
 - **Alias `@/`** pointant vers la racine du dépôt (et non `src/`).
 - **Build** : Vite 8 ; l'installation npm exige `--legacy-peer-deps`.
 
 ## 10. Limites connues et dette
 
-- **P0 — bloquant** : l'objectif `light_safe` de la mission 3 est placé à `(−125, 10, 115)` avec un rayon de 9, alors que le sol local culmine à ~19,4 m (altitude minimale atteignable ≈ 21 m). L'écart vertical de 11 m dépasse le rayon : l'étape « Se poser sur l'îlot » est **inatteignable**, donc la mission 3 ne peut pas être terminée et les missions 4 à 6 restent verrouillées. Correctif attendu : remonter l'objectif au niveau du sol ou porter son rayon à ≥ 12.
 - **P2** : `trailPointsLeft/Right` et `trailMeshLeft/Right` sont déclarés dans `birdModel.ts` mais aucun ruban de sillage n'est créé ni rendu.
 - **P2** : les pièces du monde ne sont pas persistées ; recharger la page les fait réapparaître.
 - **P2** : l'objectif `land` ne vérifie pas l'atterrissage (même corrigé, il ne validerait qu'une proximité).
 - **P2** : pas de collision avec le décor (bâtiments, arbres) ; le vol peut traverser le Phare.
-- **P2** : une mission terminée ne peut pas être rejouée ; la mission active est perdue au rechargement.
-- **P2** : déblocage des missions basé sur l'index du tableau, pas sur un identifiant de prérequis.
+- **P2** : la mission active est perdue au rechargement (les missions restent librement sélectionnables).
+- **P3** : les tuiles de terrain se régénèrent par lignes/colonnes de 5 à chaque franchissement de 480 unités ; un micro-freeze est possible sur GPU très lent.
 - **P3** : `MissionType` (`speed_run`, `tutorial`) et la dépendance `motion` ne sont pas utilisés.
 - **P2** : aucun test automatisé, aucune CI, aucun formatter ; `lint` = `tsc --noEmit`.
 - **P3** : aucune détection tactile réelle (le D-pad suit le breakpoint CSS).
@@ -224,8 +239,8 @@ La boucle n'a pas d'état d'échec : on ne peut pas perdre, seulement errer. Le 
 - [ ] `npm install --legacy-peer-deps && npm run dev` lance le jeu sur `http://localhost:3000`.
 - [ ] `npm run lint` et `npm run build` passent sans erreur.
 - [ ] Le joueur décolle, vole et franchit le premier anneau sans documentation externe.
-- [ ] Les 6 missions sont terminables et créditent leur récompense exacte. ⚠️ **Échec connu** : la mission 3 est bloquée par l'objectif `light_safe` (voir § 10).
-- [ ] Les 6 oiseaux sont achetables et modifient réellement le comportement de vol.
+- [ ] Les 8 missions sont terminables et créditent leur récompense exacte.
+- [ ] Les 17 oiseaux sont achetables et modifient réellement le comportement de vol.
 - [ ] Le rechargement conserve pièces, oiseaux débloqués, oiseau équipé et progression des missions.
 - [ ] Le jeu reste jouable au clavier sur desktop et au tactile sur mobile.
 - [ ] Aucune requête réseau après le chargement des bundles.

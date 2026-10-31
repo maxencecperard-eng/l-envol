@@ -1,6 +1,6 @@
 # L'Envol — Simulateur d'Oiseau
 
-Pilotez un oiseau au-dessus d'une campagne côtière générée à l'exécution, franchissez des anneaux dorés, ramassez des pièces et débloquez des espèces toujours plus rapides. Application **100 % client** (React + Three.js), sans backend, sans assets binaires : monde, oiseaux et sons sont générés à l'exécution.
+Pilotez un oiseau au-dessus d'un monde ouvert quasi infini généré à l'exécution, franchissez des anneaux dorés, ramassez des pièces et débloquez des espèces toujours plus rapides. Application **100 % client** (React + Three.js), sans backend, sans assets binaires : monde, oiseaux et sons sont générés à l'exécution.
 
 > Documentation produit : [`PRD.md`](./PRD.md) · Conventions agents : [`AGENTS.md`](./AGENTS.md)
 
@@ -9,10 +9,10 @@ Pilotez un oiseau au-dessus d'une campagne côtière générée à l'exécution,
 ## Aperçu
 
 - **Vol libre** avec inertie, piqué, battement d'ailes, courants ascendants et caméra de poursuite cinématique.
-- **6 missions** scénarisées (didacticiel, aventure, défi) déclenchées par proximité, avec récompenses en pièces et déblocage progressif.
-- **6 oiseaux** aux caractéristiques distinctes (vitesse, maniabilité, plané, piqué), achetables dans la Volière.
-- **Monde continu mais borné** : 520 × 520 unités, 6 points d'intérêt (Grand Chêne, Moulin, Phare, Village, Falaises, Lac), 4 ascendances thermiques, 18 pièces flottantes.
-- **HUD complet** : journal des missions, télémétrie (vitesse/altitude), radar-minimap orienté, contrôles tactiles.
+- **Monde ouvert sans bord** : tuiles de terrain de 480 unités générées en continu autour du joueur (5 × 5), océan et nuages qui suivent le vol, 6 points d'intérêt, 18 ascendances thermiques et plus de 100 pièces flottantes.
+- **8 missions** scénarisées (didacticiel, aventure, défi), toutes sélectionnables et rejouables depuis le sélecteur : récompense en pièces, distance depuis la position actuelle et longueur du parcours affichées.
+- **17 oiseaux** aux caractéristiques et silhouettes distinctes (vitesse, maniabilité, plané, piqué), avec **aperçu 3D animé** dans la Volière.
+- **HUD complet** : sélecteur de missions, télémétrie (vitesse/altitude), radar-minimap orienté et zoomable jusqu'à 1,8 km, contrôles tactiles.
 - **Audio procédural** : vent dynamique, battements, gazouillis, fanfares — synthétisés en Web Audio.
 
 ## Stack
@@ -72,17 +72,19 @@ src/
 ├── types/game.ts              # Contrats de données (BirdDef, Mission, CoinPickup…)
 ├── game/
 │   ├── flightController.ts    # Physique de vol, caméra, télémétrie (sans React)
-│   ├── birdsData.ts           # Catalogue des 6 oiseaux
+│   ├── birdsData.ts           # Catalogue des 17 oiseaux
 │   └── missionsData.ts        # Missions, objectifs, pièces, ascendances, points d'intérêt
 ├── world/
-│   ├── proceduralWorld.ts     # getTerrainHeight(), terrain, bâtiments, forêt, nuages, anneaux
-│   └── birdModel.ts           # Oiseau articulé (ailes, queue, tête) et animation de vol
+│   ├── proceduralWorld.ts     # getTerrainHeight(), terrain streamé, bâtiments, forêt, nuages, anneaux
+│   └── birdModel.ts           # Oiseau articulé (ailes, queue, tête, morphologie) et animation de vol
 ├── components/
 │   ├── FlightCanvas.tsx       # Canvas WebGL, boucle de jeu, détection objectifs/pièces
-│   ├── MissionHUD.tsx         # Bandeau mission, solde de pièces, journal des missions
+│   ├── MissionHUD.tsx         # Bandeau mission, solde de pièces, boutons Missions/Boutique
+│   ├── MissionPickerModal.tsx # Sélecteur de mission (gains, distances, rejouabilité)
+│   ├── BirdShopModal.tsx      # Volière / boutique
+│   ├── BirdPreview3D.tsx      # Scène Three.js dédiée à l'aperçu 3D d'un oiseau
 │   ├── Minimap.tsx            # Radar orienté, distance à l'objectif, zoom/agrandissement
-│   ├── FlightControlsOverlay.tsx # Télémétrie, boutons de vol, D-pad mobile, son
-│   └── BirdShopModal.tsx      # Volière / boutique
+│   └── FlightControlsOverlay.tsx # Télémétrie, boutons de vol, D-pad mobile, son
 └── audio/soundManager.ts      # Synthèse Web Audio (vent, battements, fanfares)
 ```
 
@@ -90,8 +92,8 @@ src/
 
 1. `App` détient tout l'état React et le sauvegarde dans `localStorage`.
 2. `FlightCanvas` monte le renderer **une seule fois** (`useEffect(..., [])`) et recopie les props dans des `refs`.
-3. La boucle `tick()` : physique → mesh de l'oiseau → animation du monde → tests de proximité objectif/pièces → télémétrie vers React → rendu.
-4. `getTerrainHeight(x, z)` est la source de vérité unique : maillage du terrain, placement des bâtiments et collision au sol.
+3. La boucle `tick()` : physique → mesh de l'oiseau → animation/streaming du monde → tests de proximité objectif/pièces → télémétrie vers React → rendu.
+4. `getTerrainHeight(x, z)` est la source de vérité unique et **non bornée** : maillage des tuiles, placement des arbres/bâtiments et collision au sol. `updateWorld()` reçoit la position du joueur pour régénérer les tuiles, l'océan et les nuages autour de lui.
 
 ## Persistance
 
@@ -116,8 +118,8 @@ Les pièces du monde (`INITIAL_COINS`) ne sont **pas** persistées : elles réap
 
 ### Limites connues
 
-- La mission 3 (« Le Mystère du Grand Phare ») est actuellement **impossible à terminer** : son objectif d'atterrissage est placé sous le niveau du sol, hors du rayon de validation. Les missions 4 à 6 restent donc verrouillées. Détail et correctif dans [`PRD.md` § 10](./PRD.md#10-limites-connues-et-dette).
 - Les pièces du monde et la position de vol ne sont pas sauvegardées ; la mission active est perdue au rechargement.
+- Relancer une mission depuis le sélecteur remet ses objectifs à zéro (c'est volontaire, les missions sont rejouables).
 
 ## Contribuer
 
@@ -125,4 +127,4 @@ Les pièces du monde (`INITIAL_COINS`) ne sont **pas** persistées : elles réap
 - Aucun asset image/son/font : tout est généré (Three.js, Canvas, Web Audio).
 - Ne pas recréer le renderer WebGL depuis React ; passer par les `refs` existants.
 - Ne pas modifier le bloc `DISABLE_HMR` de `vite.config.ts` (comportement AI Studio).
-- Ajouter un oiseau = une entrée dans `birdsData.ts` ; une mission = une entrée dans `INITIAL_MISSIONS` ; l'ordre du tableau pilote le déblocage.
+- Ajouter un oiseau = une entrée dans `birdsData.ts` (les champs optionnels `bodyWidth` / `tailLength` / `beakLength` / `crestSize` pilotent sa silhouette 3D) ; une mission = une entrée dans `INITIAL_MISSIONS`. Toutes les missions sont librement sélectionnables.
